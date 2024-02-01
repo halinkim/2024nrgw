@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<title>2024WINTER_NRGW</title>
+
+		<link rel="stylesheet" href="dist/reset.css">
+		<link rel="stylesheet" href="dist/reveal.css">
+		<!-- <link rel="stylesheet" href="dist/theme/dckwhite.css"> -->
+		<link rel="stylesheet" href="dist/theme/dckwhite.css">
+
+		<!-- Theme used for syntax highlighted code -->
+		<link rel="stylesheet" href="plugin/highlight/github.css">
+	</head>
+	<body>
+		<img src="img/black.png" width="7%" style="position: fixed; bottom: 15px; right: 15px;">
+		<div class="reveal">
+			<div class="slides">
+				<section>
+					
+					<h2> 2024 NRGW 겨울학교 문제 풀이 </h2>
+					<small> 방학에중력파캠프라니_김동찬 </small>
+					<br>
+					
+				</section>
+
+				<section>
+					<h2> 1. 중력파형의 match 계산 코드 </h2>
+					<ul>
+						<li> $T = Ndt = 1/df$ </li>
+						<li> $\text{sample rate} = \text{number of datas / 1s}$ </li>
+						<li> 전체 시간이 $8$초이고 sample rate가 $4096\text{ Hz}$이면 전체 데이터 수는 $8 * 4096$개,</li>
+						<li> $df = 1 / T = 1 / 8 \text{ Hz}$</li>
+						<li> Time -> Freq 변환시 데이터 수 $N\to \lfloor \frac{N}{2} \rfloor + 1$ </li>
+					</ul>
+				</section>
+
+				<section>
+					<pre class="python"><code data-trim data-noescape data-line-numbers="|1-7|9-15|">
+tar_duration = 8
+tar_df = 1 / tar_duration
+tar_f_low = 10
+tar_f_high = 2048
+tar_sample_rate = 4096
+tar_dt = 1 / tar_sample_rate
+tar_N = tar_duration * tar_sample_rate
+
+hp1, _ = get_fd_waveform(approximant="IMRPhenomXPHM", mass1=10, mass2=8,
+							delta_f=tar_df, f_lower=tar_f_low, f_final=tar_f_high)
+hp2, _ = get_fd_waveform(approximant="TaylorF2", mass1=10, mass2=8,
+							delta_f=tar_df, f_lower=tar_f_low, f_final=tar_f_high)
+hp3, _ = get_fd_waveform(approximant="IMRPhenomD", mass1=10, mass2=8,
+							delta_f=tar_df, f_lower=tar_f_low, f_final=tar_f_high)
+psd = aLIGODesignSensitivityT1800044(tar_N // 2 + 1, tar_df, tar_f_low)
+					</code></pre>
+				</section>
+
+				<section>
+				
+					<pre class="python"><code data-trim data-noescape data-line-numbers="|2-3|4-5|6-7|8|9|10|11|12-13|14-15|16">
+def match(h1, h2, psd, f_low, f_high):
+	df = h1.delta_f
+	dt = h1.delta_t
+	ind_low = int(f_low / df)
+	ind_high = int(f_high / df)
+	n = len(h1)
+	N = 2 * (n - 1)
+	before_ifft = zeros(N, dtype=np.complex128)
+	before_ifft[ind_low: ind_high] = np.conj(h1[ind_low: ind_high]) * h2[ind_low: ind_high] / psd[ind_low: ind_high]
+	res_ifft = zeros(N, dtype=np.complex128)
+	ifft(before_ifft, res_ifft)
+	res_abs = np.abs(res_ifft)
+	max_t = max(res_abs)
+	h1_sigma = sigmasq(h1, psd, f_low, f_high) ** .5
+	h2_sigma = sigmasq(h2, psd, f_low, f_high) ** .5
+	return max_t / h1_sigma / h2_sigma * 4 * df
+					</code></pre>
+				</section>
+
+				<section>
+					<pre class="python"><code data-trim data-noescape data-line-numbers="|1-4|6-7|9-10|">
+						match(hp1, hp1, psd, tar_f_low, tar_f_high)
+						match(hp2, hp2, psd, tar_f_low, tar_f_high)
+						match(hp3, hp3, psd, tar_f_low, tar_f_high)
+						#0.9999999999999999
+						
+						match(hp1, hp2, psd, tar_f_low, tar_f_high)
+						# 0.9039976031702242
+
+						match(hp1, hp3, psd, tar_f_low, tar_f_high)
+						#0.9989037652028802
+											</code></pre>
+
+				</section>
+
+				<section>
+					<h2> 2. SNR </h2>
+					<pre class="python"><code data-trim data-noescape data-line-numbers="">
+						AttributeError: module 'lalframe' has no attribute 'FrSetMode'
+						-> lalframe.FrStreamSetMode(stream, stream.mode)
+											</code></pre>
+
+					<pre class="python"><code data-trim data-noescape data-line-numbers="|1-9|11-15|16-19|">
+						apx = "IMRPhenomD"
+						data_gw = frame.read_frame('pub/H1_GW_NR2024_PROBLEM2.gwf','H1:NR2024_WINTER')
+						m1 = 40
+						m2 = 25
+						cutoff = 12
+						crop = (0, 1)
+						psd_seg = 8
+						ff = 4096
+						sample_rate = 2048
+
+						strain = resample_to_delta_t(data_gw, 1.0/sample_rate)
+						conditioned = strain.crop(*crop)
+						psd = conditioned.psd(psd_seg)
+						psd = interpolate(psd, conditioned.delta_f)
+						psd = inverse_spectrum_truncation(psd, int(4 * conditioned.sample_rate), low_frequency_cutoff = cutoff)
+
+						hp, hc = get_td_waveform(approximant = apx, mass1 = m1, mass2 = m2, delta_t = 1.0/sample_rate, f_lower = cutoff, f_final=ff)
+						hp.resize(len(conditioned))
+						template = hp.cyclic_time_shift(hp.start_time)
+											</code></pre>
+				</section>
+
+				<section>
+					<pre class="python"><code data-trim data-noescape data-line-numbers="|1-2|4-6|">
+						snr = matched_filter(template, conditioned, psd = psd, low_frequency_cutoff = cutoff, high_frequency_cutoff = ff)
+						snr = snr.crop(*crop)
+
+						peak = abs(snr).numpy().argmax()
+						snr_peak = snr[peak]
+						time = snr.sample_times[peak]
+						# Time 24.98388671875s, SNR 31.64152215664223
+											</code></pre>
+					
+				</section>
+
+				<section>
+					<h2> 3. 질량, 거리 결정 </h2>
+					<ul>
+						<li> 2번 문제와 동일한 코드, </li>
+						<li> $m_1$, $m_2$에 대한 반복문 추가 </li>
+						<pre class="python"><code data-trim data-noescape data-line-numbers="|1-5|6-7|">
+							m1_m2_data = []
+							for m1 in range(10, 61):
+								for m2 in range(10, m1 + 1):
+									...
+									m1_m2_data.append((snr_peak, m1, m2))
+							m1_m2_data.sort(reverse=True)
+							m1_m2_data[:10]
+							#
+							[(23.400518548560484, 45, 31),
+							(23.371473424287032, 48, 29),
+							(23.35389757087083, 46, 30),
+							(23.33037384197594, 49, 28),
+							(23.314350535196947, 39, 36),
+							(23.310197393735947, 40, 35),
+							(23.30951318061889, 38, 37),
+							(23.30094861325604, 41, 34),
+							(23.299214330013648, 51, 27),
+							(23.24127279882111, 42, 33)]
+												</code></pre>
+					</ul>
+				</section>
+				<section>
+					<ul>
+						<li> $D = \frac{\sqrt{\langle g | g\rangle}}{2\times \text{SNR}}$</li>
+						<li> $\langle g | g\rangle$은 1번 문제에서 사용한 sigmasq 사용</li>
+						<li> 약 $910.0623673770419$</li>
+					</ul>
+				</section>
+
+				<section>
+					<h2> 4. bilby 모수 추정 </h2>
+					<ul>
+						<li> Stuck on <span style="color:orangered">Generating initial points from the prior...</span> </li>
+						<li> PSD problem </li>
+						<li> AdVDesignSensitivityP1200087? aLIGODesignSensitivityT1800044?</li>
+					</ul>
+						<pre class="python"><code data-trim data-noescape data-line-numbers="">
+							prior['mass_1'] = Uniform(name='mass_1', minimum=40.0,maximum=60.0)
+							prior['mass_2'] = Uniform(name='mass_2', minimum=20.0, maximum=40.0)
+							prior['a_1'] = Uniform(name="a_1", minimum=0, maximum=1.0)
+							prior['a_2'] = Uniform(name="a_2", minimum=0, maximum=1.0)
+							prior['luminosity_distance'] = PowerLaw(alpha=2, name='luminosity_distance', minimum=800, maximum=1200, unit='Mpc', latex_label='$d_L$')
+							prior['tilt_1'] = 0.0
+							prior['tilt_2'] = 0.0
+							prior['phase'] = 0.0
+							prior['theta_jn'] = 0.0
+							prior['geocent_time'] = 0.0
+							prior["theta_jn"] = Sine(name = "theta_jn")
+							prior['ra'] = Uniform(name = "ra", minimum = 0, maximum = 2*np.pi, boundary = "periodic")
+							prior['psi'] = Uniform(name = "psi", minimum = 0, maximum = np.pi, boundary = "periodic")
+							prior['dec'] = Cosine(name = "dec")
+												</code></pre>
+					
+				</section>
+
+				<section>
+					<img src="img/output.png" width="60%">
+				</section>
+
+				<section>
+					<h2> 5. 중력파 신호 찾기 </h2>
+					<ul>
+						<li> 전체 시간에 대한 snr</li>
+						<img src="img/snr5.png" width="50%">
+						<li> 3번 문제를 여러 번 풀기 </li>
+						<pre class="python"><code data-trim data-noescape data-line-numbers="|5|6|7|">
+							m1_m2_data = []
+							for m1 in range(10, 61):
+								for m2 in range(10, m1 + 1):
+									cutoff = 12
+									crop = (0, 40)
+									crop = (20, 20)
+									crop = (40, 0)
+												</code></pre>
+					</ul>
+				</section>
+
+				<section>
+					<ul>
+						<li> $\text{SNR}$: $34.98828125$, $m_1$: $45$, $m_2$: $30$ </li>
+						<li> $\text{SNR}$: $62.98681640$, $m_1$: $50$, $m_2$: $15$</li>
+						<li> $\text{SNR}$: $88.98779296$, $m_1$: $30$, $m_2$: $25$</li>
+					</ul>
+				</section>
+
+
+			</div>
+		</div>
+
+		<script src="dist/reveal.js"></script>
+		<script src="plugin/notes/notes.js"></script>
+		<script src="plugin/markdown/markdown.js"></script>
+		<script src="plugin/highlight/highlight.js"></script>
+		<script src="plugin/math/math.js"></script>
+		<script>
+			// More info about initialization & config:
+			// - https://revealjs.com/initialization/
+			// - https://revealjs.com/config/
+			Reveal.initialize({
+				katex: {
+    version: 'latest',
+    delimiters: [
+      {left: '$$', right: '$$', display: true},
+      {left: '$', right: '$', display: false},
+      {left: '\\(', right: '\\)', display: false},
+      {left: '\\[', right: '\\]', display: true}
+   ],
+   ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre']
+ },
+				hash: true,
+
+				// Learn about plugins: https://revealjs.com/plugins/
+				plugins: [ RevealMarkdown, RevealHighlight, RevealNotes, RevealMath.KaTeX ]
+			});
+		</script>
+	</body>
+</html>
